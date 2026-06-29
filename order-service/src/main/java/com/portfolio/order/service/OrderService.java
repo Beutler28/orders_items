@@ -1,7 +1,9 @@
 package com.portfolio.order.service;
 
 import com.portfolio.order.domain.Order;
+import com.portfolio.order.domain.OrderStatus;
 import com.portfolio.order.exception.OrderNotFoundException;
+import com.portfolio.order.messaging.OrderEventPublisher;
 import com.portfolio.order.repository.OrderRepository;
 import com.portfolio.order.web.dto.CreateOrderRequest;
 import org.springframework.data.domain.Page;
@@ -15,9 +17,11 @@ import java.util.UUID;
 public class OrderService {
 
     private final OrderRepository orderRepository;
+    private final OrderEventPublisher eventPublisher;
 
-    public OrderService(OrderRepository orderRepository) {
+    public OrderService(OrderRepository orderRepository, OrderEventPublisher eventPublisher) {
         this.orderRepository = orderRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     @Transactional
@@ -25,7 +29,24 @@ public class OrderService {
         Order order = Order.create(request.customerId());
         request.items().forEach(item ->
                 order.addItem(item.productId(), item.quantity(), item.unitPrice()));
-        return orderRepository.save(order);
+        orderRepository.save(order);
+
+        eventPublisher.publishOrderCreated(order);
+        order.transitionTo(OrderStatus.PAYMENT_PENDING);
+
+        return order;
+    }
+
+    @Transactional
+    public void markPaid(UUID orderId) {
+        Order order = findOrFail(orderId);
+        order.transitionTo(OrderStatus.PAID);
+    }
+
+    @Transactional
+    public void markPaymentFailed(UUID orderId) {
+        Order order = findOrFail(orderId);
+        order.transitionTo(OrderStatus.PAYMENT_FAILED);
     }
 
     @Transactional(readOnly = true)
@@ -37,5 +58,9 @@ public class OrderService {
     @Transactional(readOnly = true)
     public Page<Order> listOrders(Pageable pageable) {
         return orderRepository.findAll(pageable);
+    }
+
+    private Order findOrFail(UUID id) {
+        return orderRepository.findById(id).orElseThrow(() -> new OrderNotFoundException(id));
     }
 }
